@@ -1,5 +1,5 @@
 # main.py
-# Entry point: runs the full Medical Embedding pipeline
+# Entry point: full Medical Embedding pipeline
 
 import torch
 import torch.nn as nn
@@ -14,53 +14,53 @@ from evaluation.evaluate import link_prediction, type_classification_accuracy, p
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-EMBED_DIM        = 256
-NUM_LAYERS       = 6
-NUM_HEADS        = 8
-FF_DIM           = 1024
-MAX_LEN          = 128
-VOCAB_SIZE       = 15000
-NUM_EPOCHS       = 20
-LR               = 1e-4
-BATCH_SIZE       = 8
-DEVICE           = "cuda" if torch.cuda.is_available() else "cpu"
-TOKENIZER_PATH   = "tokenizer_output"
-MODEL_PATH       = "medical_encoder.pt"
-REL_EMBED_PATH   = "relation_embeds.pt"   # ← saved/loaded trained relation embeddings
-USE_PUBMED       = True
-PUBMED_SIZE      = 5000
+EMBED_DIM      = 256
+NUM_LAYERS     = 6
+NUM_HEADS      = 8
+FF_DIM         = 1024
+MAX_LEN        = 128
+VOCAB_SIZE     = 15000
+NUM_EPOCHS     = 50        # trainer will early-stop before this if loss plateaus
+LR             = 1e-4
+BATCH_SIZE     = 8
+PATIENCE       = 5         # early stopping patience
+DEVICE         = "cuda" if torch.cuda.is_available() else "cpu"
+TOKENIZER_PATH = "tokenizer_output"
+MODEL_PATH     = "medical_encoder.pt"
+REL_EMBED_PATH = "relation_embeds.pt"
+USE_PUBMED     = True
+PUBMED_SIZE    = 50000     # load up to 50k samples
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def main():
     print(f"Device: {DEVICE}")
 
-    # 1. Load and preprocess corpus
-    print("\n[1/5] Loading corpus...")
-    corpus = preprocess(load_corpus(use_pubmed=USE_PUBMED, pubmed_size=PUBMED_SIZE))
+    # 1. Load corpus
+    print("\n[1/6] Loading corpus...")
+    raw    = load_corpus(use_pubmed=USE_PUBMED, pubmed_size=PUBMED_SIZE)
+    corpus = preprocess(raw)
     print(f"  Corpus size: {len(corpus)} sentences")
 
-    # 2. Build Knowledge Graph from corpus
-    print("\n[2/5] Building Knowledge Graph...")
+    # 2. Build KG
+    print("\n[2/6] Building Knowledge Graph...")
     triples, entity_types, entities, relations, entity_to_id, relation_to_id = build_kg(corpus)
     print(f"  Entities : {len(entities)}")
     print(f"  Relations: {len(relations)} — {relations}")
     print(f"  Triples  : {len(triples)}")
 
-    # 3. Train (or load) tokenizer
-    print("\n[3/5] Training tokenizer...")
+    # 3. Tokenizer
+    print("\n[3/6] Tokenizer...")
     if os.path.exists(os.path.join(TOKENIZER_PATH, "tokenizer.json")):
         tokenizer = load_tokenizer(TOKENIZER_PATH)
     else:
         tokenizer = train_tokenizer(corpus, vocab_size=VOCAB_SIZE, save_path=TOKENIZER_PATH)
+    print(f"  Vocab size: {tokenizer.get_vocab_size()}")
 
-    actual_vocab = tokenizer.get_vocab_size()
-    print(f"  Vocab size: {actual_vocab}")
-
-    # 4. Initialize model
-    print("\n[4/5] Initializing Transformer Encoder...")
+    # 4. Model
+    print("\n[4/6] Initializing model...")
     model = MedicalTransformerEncoder(
-        vocab_size = actual_vocab,
+        vocab_size = tokenizer.get_vocab_size(),
         embed_dim  = EMBED_DIM,
         num_layers = NUM_LAYERS,
         num_heads  = NUM_HEADS,
@@ -69,10 +69,10 @@ def main():
         num_types  = len(TYPE_TO_ID),
     )
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"  Total parameters: {total_params:,}")
+    print(f"  Parameters: {total_params:,}")
 
-    # 5. Train — returns BOTH model and trained relation embeddings
-    print("\n[5/5] Training...")
+    # 5. Train
+    print("\n[5/6] Training...")
     model, relation_embeds = train(
         model          = model,
         tokenizer      = tokenizer,
@@ -88,16 +88,14 @@ def main():
         device         = DEVICE,
         batch_size     = BATCH_SIZE,
         rel_embed_path = REL_EMBED_PATH,
+        patience       = PATIENCE,
     )
 
-    # Save model
     torch.save(model.state_dict(), MODEL_PATH)
-    print(f"  Model saved to: {MODEL_PATH}")
+    print(f"  Model saved → {MODEL_PATH}")
 
-    # 6. Evaluate — using the TRAINED relation embeddings (not random ones)
+    # 6. Evaluate
     print("\n[6/6] Evaluating...")
-
-    # Move trained relation embeddings to correct device
     relation_embeds = relation_embeds.to(DEVICE)
 
     mrr, h10 = link_prediction(
@@ -121,11 +119,14 @@ def main():
         save_path    = "tsne_plot.png",
     )
 
-    print("\n── Final Results ──────────────────────")
+    print("\n── Final Results ──────────────────────────")
     print(f"  MRR:                    {mrr:.4f}")
     print(f"  Hits@10:                {h10:.4f}")
     print(f"  Type Classification:    {acc:.4f}")
-    print("────────────────────────────────────────")
+    print(f"  Entities:               {len(entities)}")
+    print(f"  Triples:                {len(triples)}")
+    print(f"  Vocab size:             {tokenizer.get_vocab_size()}")
+    print("────────────────────────────────────────────")
 
 
 if __name__ == "__main__":

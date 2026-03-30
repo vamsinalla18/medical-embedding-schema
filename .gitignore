@@ -1,2 +1,6 @@
 __pycache__/
+*.pt
 *.pyc
+tokenizer_output/
+tsne_plot.png
+.DS_Store
